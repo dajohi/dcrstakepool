@@ -23,6 +23,7 @@ import (
 
 	"github.com/decred/dcrd/blockchain/stake/v3"
 	"github.com/decred/dcrd/chaincfg/chainhash"
+	"github.com/decred/dcrd/dcrutil/v3"
 	"github.com/decred/dcrd/wire"
 	pb "github.com/decred/dcrstakepool/backend/stakepoold/rpc/stakepoolrpc"
 	"github.com/decred/dcrstakepool/backend/stakepoold/stakepool"
@@ -369,5 +370,56 @@ func (s *stakepooldServer) GetFeeAddress(ctx context.Context, req *pb.GetFeeAddr
 		FeeAddress:  feeAddress.Address(),
 		BlockHeight: resp.BlockHeight,
 		SDiff:       sDiff,
+	}, nil
+}
+
+func (s *stakepooldServer) PayFee(ctx context.Context, req *pb.PayFeeRequest) (*pb.PayFeeResponse, error) {
+	ticketHash, err := chainhash.NewHashFromStr(req.TicketHash)
+	if err != nil {
+		return nil, err
+	}
+	votingWIF, err := dcrutil.DecodeWIF(req.VotingWIF, s.stakepoold.Params.PrivateKeyID)
+	if err != nil {
+		return nil, err
+	}
+	feeTx := wire.NewMsgTx()
+	err = feeTx.FromBytes(req.FeeTx)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := s.stakepoold.GetRawTransaction(ctx, ticketHash)
+	if err != nil {
+		log.Errorf("PayFee: getrawtransaction: %v", err)
+		return nil, errors.New("RPC server error")
+	}
+	msgHex, err := hex.DecodeString(resp.Hex)
+	if err != nil {
+		return nil, err
+	}
+	msgTx := wire.NewMsgTx()
+	if err = msgTx.FromBytes(msgHex); err != nil {
+		return nil, errors.New("failed to deserialize tx")
+	}
+
+	err = s.stakepoold.AddTicket(ctx, dcrutil.NewTx(msgTx))
+	if err != nil {
+		log.Errorf("PayFee: addticket: %v", err)
+		return nil, errors.New("RPC server error")
+	}
+
+	err = s.stakepoold.ImportPrivKey(ctx, votingWIF)
+	if err != nil {
+		log.Errorf("PayFee: importprivkey: %v", err)
+		return nil, errors.New("RPC server error")
+	}
+
+	res, err := s.stakepoold.SendRawTransaction(ctx, feeTx)
+	if err != nil {
+		log.Errorf("PayFee: sendrawtransaction: %v", err)
+		return nil, errors.New("transaction failed to send")
+	}
+	return &pb.PayFeeResponse{
+		Hash: res.String(),
 	}, nil
 }

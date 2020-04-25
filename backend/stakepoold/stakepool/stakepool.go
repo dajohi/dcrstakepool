@@ -490,6 +490,18 @@ func (spd *Stakepoold) GetNewAddress(ctx context.Context, account string) (dcrut
 	return spd.WalletConnection.RPCClient().GetNewAddress(ctx, account)
 }
 
+func (spd *Stakepoold) ImportPrivKey(ctx context.Context, wif *dcrutil.WIF) error {
+	return spd.WalletConnection.RPCClient().ImportPrivKeyRescanFrom(ctx, wif, "", false, 0)
+}
+
+func (spd *Stakepoold) AddTicket(ctx context.Context, tx *dcrutil.Tx) error {
+	return spd.WalletConnection.RPCClient().AddTicket(ctx, tx)
+}
+
+func (spd *Stakepoold) SendRawTransaction(ctx context.Context, msgTx *wire.MsgTx) (*chainhash.Hash, error) {
+	return spd.NodeConnection.SendRawTransaction(ctx, msgTx, false)
+}
+
 // GetStakeInfo performs the rpc command GetStakeInfo.
 func (spd *Stakepoold) GetStakeInfo(ctx context.Context) (*wallettypes.GetStakeInfoResult, error) {
 	response, err := spd.WalletConnection.RPCClient().GetStakeInfo(ctx)
