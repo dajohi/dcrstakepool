@@ -22,6 +22,7 @@ import (
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/chaincfg/v3"
 	"github.com/decred/dcrd/dcrutil/v3"
+	chaintypes "github.com/decred/dcrd/rpc/jsonrpc/types/v2"
 	"github.com/decred/dcrd/rpcclient/v6"
 	"github.com/decred/dcrd/wire"
 	"github.com/decred/dcrstakepool/backend/stakepoold/userdata"
@@ -455,7 +456,7 @@ func (spd *Stakepoold) WalletInfo(ctx context.Context) (*wallettypes.WalletInfoR
 func (spd *Stakepoold) ValidateAddress(ctx context.Context, address string) (*wallettypes.ValidateAddressWalletResult, error) {
 	addr, err := dcrutil.DecodeAddress(address, spd.Params)
 	if err != nil {
-		log.Errorf("ValidateAddress: ValidateAddress rpc failed: %v", err)
+		log.Errorf("ValidateAddress: DecodeAddress failed: %v", err)
 		return nil, err
 	}
 
@@ -466,6 +467,27 @@ func (spd *Stakepoold) ValidateAddress(ctx context.Context, address string) (*wa
 	}
 
 	return response, nil
+}
+
+// GetTransaction performs the rpc command gettransaction
+func (spd *Stakepoold) GetRawTransaction(ctx context.Context, txHash *chainhash.Hash) (*chaintypes.TxRawResult, error) {
+	return spd.NodeConnection.GetRawTransactionVerbose(ctx, txHash)
+}
+
+func (spd *Stakepoold) VerifyMessage(ctx context.Context, address dcrutil.Address, signature, message string) (bool, error) {
+	return spd.WalletConnection.RPCClient().VerifyMessage(ctx, address, signature, message)
+}
+
+func (spd *Stakepoold) GetStakeDifficulty(ctx context.Context, blockHash *chainhash.Hash) (int64, error) {
+	blockHeader, err := spd.NodeConnection.GetBlockHeader(ctx, blockHash)
+	if err != nil {
+		return -1, err
+	}
+	return blockHeader.SBits, nil
+}
+
+func (spd *Stakepoold) GetNewAddress(ctx context.Context, account string) (dcrutil.Address, error) {
+	return spd.WalletConnection.RPCClient().GetNewAddress(ctx, account)
 }
 
 // GetStakeInfo performs the rpc command GetStakeInfo.

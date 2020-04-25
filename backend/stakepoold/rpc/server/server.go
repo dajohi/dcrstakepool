@@ -1,5 +1,5 @@
 // Copyright (c) 2015-2016 The btcsuite developers
-// Copyright (c) 2016-2017 The Decred developers
+// Copyright (c) 2016-2020 The Decred developers
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
@@ -14,11 +14,16 @@ package server
 
 import (
 	"context"
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"time"
 
 	"google.golang.org/grpc"
 
+	"github.com/decred/dcrd/blockchain/stake/v3"
 	"github.com/decred/dcrd/chaincfg/chainhash"
+	"github.com/decred/dcrd/wire"
 	pb "github.com/decred/dcrstakepool/backend/stakepoold/rpc/stakepoolrpc"
 	"github.com/decred/dcrstakepool/backend/stakepoold/stakepool"
 	"github.com/decred/dcrstakepool/backend/stakepoold/userdata"
@@ -292,5 +297,77 @@ func (s *stakepooldServer) GetStakeInfo(ctx context.Context, req *pb.GetStakeInf
 func (s *stakepooldServer) GetColdWalletExtPub(ctx context.Context, req *pb.GetColdWalletExtPubRequest) (*pb.GetColdWalletExtPubResponse, error) {
 	return &pb.GetColdWalletExtPubResponse{
 		ColdWalletExtPub: s.stakepoold.ColdWalletExtPub,
+	}, nil
+}
+
+func (s *stakepooldServer) GetFeeAddress(ctx context.Context, req *pb.GetFeeAddressRequest) (*pb.GetFeeAddressResponse, error) {
+	txHash, err := chainhash.NewHashFromStr(req.Hash)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.stakepoold.GetRawTransaction(ctx, txHash)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Confirmations < 2 || resp.BlockHeight < 0 {
+		return nil, errors.New("ticket does not enough confirmations")
+	}
+	if resp.Confirmations > int64(uint32(s.stakepoold.Params.TicketMaturity)+s.stakepoold.Params.TicketExpiry) {
+		return nil, errors.New("ticket has already expired")
+	}
+
+	msgHex, err := hex.DecodeString(resp.Hex)
+	if err != nil {
+		return nil, err
+	}
+
+	msgTx := wire.NewMsgTx()
+	if err = msgTx.FromBytes(msgHex); err != nil {
+		return nil, errors.New("failed to deserialize tx")
+	}
+	if !stake.IsSStx(msgTx) {
+		return nil, errors.New("tx not a ticket")
+	}
+	if len(msgTx.TxOut) != 3 {
+		return nil, errors.New("ticket invalid")
+	}
+
+	// Get commitment address
+	addr, err := stake.AddrFromSStxPkScrCommitment(msgTx.TxOut[1].PkScript, s.stakepoold.Params)
+	if err != nil {
+		return nil, errors.New("invalid commitment address")
+	}
+
+	// verify message
+	message := fmt.Sprintf("vsp v3 getfeeaddress %s", msgTx.TxHash())
+	valid, err := s.stakepoold.VerifyMessage(ctx, addr, req.Signature, message)
+	if err != nil {
+		return nil, errors.New("RPC server error")
+	}
+	if !valid {
+		return nil, errors.New("invalid signature")
+	}
+
+	// get stake difficulty
+	blockHash, err := chainhash.NewHashFromStr(resp.BlockHash)
+	if err != nil {
+		return nil, err
+	}
+	sDiff, err := s.stakepoold.GetStakeDifficulty(ctx, blockHash)
+	if err != nil {
+		return nil, errors.New("RPC server error")
+	}
+
+	feeAddress, err := s.stakepoold.GetNewAddress(ctx, "fees")
+	if err != nil {
+		log.Errorf("VerifyMessage: getnewaddress failed: %v", err)
+		return nil, errors.New("RPC server error")
+	}
+
+	return &pb.GetFeeAddressResponse{
+		Address:     addr.Address(),
+		FeeAddress:  feeAddress.Address(),
+		BlockHeight: resp.BlockHeight,
+		SDiff:       sDiff,
 	}, nil
 }
